@@ -1,72 +1,99 @@
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.impute import SimpleImputer
-from sklearn.compose import ColumnTransformer
+
+#đọc data
+train_data = pd.read_csv('train.csv')
+test_data  =pd.read_csv('test.csv')
+
+print(f'Kich thuoc data: {train_data.shape}')
+print(f'Kieu data: {train_data.info()}')
+
+
+#tien xu ly data
+def xu_ly_ho(data):
+    #lấy họ trong tên riêng
+    data['Hovip'] = data['Name'].str.extract(' ([A-Za-z]+)\.')
+    Ho = ['Jonkheer', 'Countess', 'Capt', 'Sir', 'Lady', 'Don',
+          'Major', 'Col', 'Rev', 'Dr', 'Dona']
+    #thay thế họ dặc biệt bằng tên khác
+    data['Hovip'] = data['Hovip'].replace(Ho, 'dacbiet')
+    data['Hovip'] = data['Hovip'].replace('Ms', 'Miss')
+    data['Hovip'] = data['Hovip'].replace('Mme', 'Mrs')
+    data['Hovip'] = data['Hovip'].replace('Mlle', 'Miss')
+    return data
+
+train_data = xu_ly_ho(train_data)
+test_data = xu_ly_ho(test_data)
+
+def fsize_age(data):
+    data['FamilySize'] = data['SibSp'] + data['Parch'] + 1
+    data['Age'] = data['Age'].fillna(data.groupby('Hovip')['Age'].transform('median'))
+    return data
+
+train_data = fsize_age(train_data)
+test_data = fsize_age(test_data)
+
+col_drop = ['PassengerId', 'SibSp', 'Parch', 'Cabin', 'Ticket']
+cot_so = ['Fare', 'FamilySize']
+cot_chu = ['Pclass', 'Sex', 'Embarked', 'Hovip']
+
+
+
 from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.compose import ColumnTransformer
+
+xu_ly_chu = Pipeline(steps = [
+    ('buoc_1', SimpleImputer(strategy = 'most_frequent')),
+    ('buoc_2', OneHotEncoder(handle_unknown = 'ignore', sparse_output = False))
+])
+xu_ly_so = Pipeline(steps = [
+    ('buoc_1', SimpleImputer(strategy = 'median')),
+    ('buoc_2', StandardScaler())
+])
+xu_ly_ca = ColumnTransformer(transformers = [
+    ('buoc_1', xu_ly_chu, cot_chu),
+    ('buoc_2', xu_ly_so, cot_so)
+])
+
+
+from sklearn.model_selection import GridSearchCV, train_test_split 
 from sklearn.ensemble import RandomForestClassifier
 
-# 1. Load dữ liệu
-df = pd.read_csv('train.csv')
+x = train_data.drop(columns = ['Survived'])
+y = train_data['Survived']
+x_train, x_test, y_train, y_test = train_test_split(x, y, random_state = 42, test_size = 0.2, stratify = y)
 
-# --- BƯỚC 1: FEATURE ENGINEERING (Thủ công trước khi vào Pipeline) ---
-
-# Tách Title từ tên (VD: "Mr.", "Mrs.")
-df['Title'] = df['Name'].str.extract(' ([A-Za-z]+)\.', expand=False)
-# Gom nhóm các title hiếm (Don, Rev, Dr...) vào nhóm "Rare"
-rare_titles = ['Lady', 'Countess','Capt', 'Col', 'Don', 'Dr', 'Major', 'Rev', 'Sir', 'Jonkheer', 'Dona']
-df['Title'] = df['Title'].replace(rare_titles, 'Rare')
-df['Title'] = df['Title'].replace('Mlle', 'Miss')
-df['Title'] = df['Title'].replace('Ms', 'Miss')
-df['Title'] = df['Title'].replace('Mme', 'Mrs')
-
-# Tạo FamilySize
-df['FamilySize'] = df['SibSp'] + df['Parch'] + 1
-
-# --- BƯỚC 2: XỬ LÝ DỮ LIỆU THIẾU (AGE) THÔNG MINH ---
-# Điền tuổi thiếu bằng trung vị (median) của từng nhóm Title
-df['Age'] = df['Age'].fillna(df.groupby('Title')['Age'].transform('median'))
-
-# --- BƯỚC 3: CHUẨN BỊ DỮ LIỆU CHO MODEL ---
-
-# Chọn các features quan trọng
-features = ['Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Fare', 'Embarked', 'Title', 'FamilySize']
-X = df[features]
-y = df['Survived']
-
-# Chia tập train/test
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-# --- BƯỚC 4: PIPELINE TỰ ĐỘNG HÓA ---
-
-# Các cột số (Numerical)
-numerical_cols = ['Age', 'Fare', 'FamilySize']
-numerical_transformer = Pipeline(steps=[
-    ('imputer', SimpleImputer(strategy='median')), # Điền median cho Fare nếu thiếu
-    ('scaler', StandardScaler())
+#chọn mô hình
+model = Pipeline(steps = [
+    ('buoc_1', xu_ly_ca),
+    ('buoc_2', RandomForestClassifier(random_state = 42))
 ])
+chinh_sieu_ts = {
+    'buoc_2__n_estimators' : [50, 70, 100, 150, 200],
+    'buoc_2__max_depth' : [None, 3, 5, 7, 10, 15, 20],
+    'buoc_2__min_samples_split' : [2, 5],
+    'buoc_2__criterion' : ['gini']
+}
+luoi_tham_so = GridSearchCV(
+    estimator = model,
+    param_grid = chinh_sieu_ts,
+    cv = 5,
+    scoring = 'accuracy',
+    n_jobs = -1
+)
+luoi_tham_so.fit(x_train, y_train)
 
-# Các cột phân loại (Categorical)
-categorical_cols = ['Pclass', 'Sex', 'Embarked', 'Title']
-categorical_transformer = Pipeline(steps=[
-    ('imputer', SimpleImputer(strategy='most_frequent')), # Điền Embarked thiếu bằng giá trị hay gặp
-    ('onehot', OneHotEncoder(handle_unknown='ignore'))
-])
+#đánh giá mô hình
+print(f"Tham số tôt nhất: {luoi_tham_so.best_params_}")
+print(f"Điểm cv tôt nhất: {luoi_tham_so.best_score_:.2f}")
+best_model = luoi_tham_so.best_estimator_
+du_doan = best_model.predict(x_test)
 
-# Gom lại
-preprocessor = ColumnTransformer(
-    transformers=[
-        ('num', numerical_transformer, numerical_cols),
-        ('cat', categorical_transformer, categorical_cols)
-    ])
+from sklearn.metrics import accuracy_score, confusion_matrix,classification_report 
+print(f"Độ chính xác: {accuracy_score(y_test, du_doan):.2f}")
+print(f"Ma trận nhầm lẫn: {confusion_matrix(y_test, du_doan)}")
+print(f"Báo cáo chi tiết: {classification_report(y_test, du_doan)}")
+dd_cc = best_model.predict(test_data)
 
-# Tạo Pipeline cuối cùng với Model
-model = Pipeline(steps=[('preprocessor', preprocessor),
-                        ('classifier', RandomForestClassifier(n_estimators=100, random_state=42))])
-
-# Train
-model.fit(X_train, y_train)
-
-# Đánh giá
-print(f"Accuracy: {model.score(X_test, y_test):.4f}")
